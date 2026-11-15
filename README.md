@@ -89,8 +89,8 @@ continua funcionando, apenas sem drag-and-drop.
 
 ```bash
 ./x8-gui.sh
-# ou, sem instalar:
-PYTHONPATH=src python3 -m x8printer.gui
+# ou, sem instalar (da raiz do projeto):
+python3 -m src.gui
 ```
 
 ![Interface](docs/interface.png)
@@ -212,14 +212,15 @@ não para adicionar recursos.
 ```bash
 python3 -m unittest discover -s tests -v
 # ou
-PYTHONPATH=src pytest
+python3 -m pytest
 ```
 
 ## Estrutura
 
 ```
 open-x8-printer/
-├── src/x8printer/
+├── src/
+│   ├── __init__.py
 │   ├── protocol.py   pacotes de config/faixa/fim
 │   ├── jbig.py       encoder JBIG via jbigkit
 │   ├── render.py     texto/imagem -> raster 1-bit
@@ -256,7 +257,7 @@ python3 -m venv .venv && . .venv/bin/activate
 pip install . pyinstaller
 pyinstaller --noconfirm --windowed --onedir --name open-x8-printer \
   --add-binary "vendor/pbmtojbg:." --collect-all tkinterdnd2 \
-  --paths src packaging/entry.py
+  --paths . packaging/entry.py
 ```
 
 ## Aviso

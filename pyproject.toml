@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "open-x8-printer"
-version = "0.1.0"
+version = "0.1.1"
 description = "Controle da impressora termica Marklife X8 (X8-04A1) via Bluetooth SPP"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -15,12 +15,11 @@ fast = ["numpy"]
 dev = ["pytest"]
 
 [project.scripts]
-x8 = "x8printer.cli:main"
-x8-gui = "x8printer.gui:main"
+x8 = "src.cli:main"
+x8-gui = "src.gui:main"
 
-[tool.setuptools.packages.find]
-where = ["src"]
-include = ["x8printer*"]
+[tool.setuptools]
+packages = ["src"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["."]

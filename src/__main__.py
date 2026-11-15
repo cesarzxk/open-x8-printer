@@ -1,4 +1,4 @@
-"""Permite `python -m x8printer`."""
+"""Permite `python -m src`."""
 
 from .cli import main
 
