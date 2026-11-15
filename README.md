@@ -6,6 +6,13 @@ Controle da impressora térmica portátil **Marklife X8** (Bluetooth `X8-04A1`,
 O protocolo foi extraído por engenharia reversa do APK oficial
 `com.feioou.deliprint.yxq` (Marklife 3.9.x), com JADX.
 
+## Download
+
+Binários prontos em **[Releases](https://github.com/cesarzxk/open-x8-printer/releases)**:
+
+- `open-x8-printer.exe` — Windows
+- `open-x8-printer-x86_64.AppImage` — Linux
+
 ## Estado
 
 | Item | Situação |
