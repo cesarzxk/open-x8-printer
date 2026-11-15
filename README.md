@@ -171,44 +171,12 @@ O MAC pode ser trocado com `--mac` ou pela variável `X8_MAC`.
    por vez; com o app aberto, os bytes vão para o telefone.
 4. Não deixe o auto-off de 30 min desligá-la no meio do job.
 
-## Firmware oficial
-
-O app consulta `POST http://m.yinxiaoqian.com/beekeyjiang/commons/getHardVersion`
-com `{"deviceName":"X8","supplierName":"自研","firewareVersion":"..."}`.
-
-Resposta para o X8:
-
-```json
-{"versionNum":"1.0.14",
- "url":"https://resource.yinxiaoqian.com/upload_file_1792043801280_X8_OTA_V1.0.14.fot"}
-```
-
-O arquivo está em `firmware/X8_OTA_V1.0.14.fot` (463.872 bytes).
-
-Formato: container **FOT** da Bluetrum, codename de chip **SMAT**
-(família AB563x / BT892x). O cabeçalho é texto claro (`FOT`, `SMAT`,
-timestamp, tamanho), mas o payload tem entropia 8,0 — é cifrado com a
-*code key* gravada no EFUSE do chip.
-
-Consequências:
-
-- `fwunpack.py` do projeto bluetrum-tools **não** abre esse container de OTA
-  (ele espera um dump de flash, não um `.fot`).
-- Para decifrar seria preciso ler a code key pelo **bootloader UART** do chip
-  (pinos PB3/PA7, adaptador 3.3 V), o que exige abrir a impressora.
-- O USB-C é só carga, então não há caminho de dados por cabo.
-- Mesmo decifrado, regravar exigiria o bootloader UART; o OTA por Bluetooth só
-  aceita o pacote cifrado da fabricante.
-
-Resumo: o `.fot` serve para **restaurar/atualizar** o firmware oficial pelo app,
-não para adicionar recursos.
-
 ## Limitações conhecidas
 
 - **Sem retrocesso de papel.** O modelo declara `backPaperNum = 0` e o app
   nunca envia ré no X8. Testamos `10 FF F2` (backoff do L11),
   `1F 11 51 00 00` (retorno do A50), `1B 6A 08` (reverse feed ESC/POS) e o
-  parâmetro 7 da config — nenhum recuou o papel; o parâmetro 7 fez o firmware
+  parâmetro 7 da config — nenhum recuou o papel; o parâmetro 7 fez a impressora
   ignorar o job. Para tirar papel, puxe a folha manualmente.
 - **Ejeção da folha.** Com `paperType=2` (documento) a página inteira é
   ejetada ao fim do job. Para avanço parcial use `paperType=1` (`x8 feed`).
@@ -242,8 +210,8 @@ open-x8-printer/
 └── pyproject.toml
 ```
 
-`firmware/`, `sdk/`, APK e fontes decompiladas de terceiros ficam **fora do
-Git** (veja `.gitignore`).
+`sdk/`, APK e fontes decompiladas de terceiros ficam **fora do Git**
+(veja `.gitignore`).
 
 ## Build e releases
 
@@ -271,5 +239,5 @@ pyinstaller --noconfirm --windowed --onedir --name open-x8-printer \
 
 Projeto independente, sem vínculo com a Marklife. O protocolo foi obtido por
 análise do app oficial; use por sua conta e risco. Um job malformado pode
-travar o firmware (aconteceu durante os testes) — o reset é por corte de
+travar a impressora (aconteceu durante os testes) — o reset é por corte de
 energia/bateria.
