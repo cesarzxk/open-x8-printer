@@ -33,7 +33,7 @@ jobs:
           curl -L -o /tmp/jbigkit.tar.gz \
             https://www.cl.cam.ac.uk/~mgk25/jbigkit/download/jbigkit-2.1.tar.gz
           tar -xzf /tmp/jbigkit.tar.gz -C /tmp
-          cd /tmp/jbigkit
+          cd /tmp/jbigkit-2.1
           gcc -O2 -static -Ilibjbig -o /tmp/pbmtojbg \
             pbmtools/pbmtojbg.c libjbig/jbig.c libjbig/jbig_ar.c
           mkdir -p "$GITHUB_WORKSPACE/vendor"
@@ -106,7 +106,7 @@ jobs:
           curl -L -o /tmp/jbigkit.tar.gz \
             https://www.cl.cam.ac.uk/~mgk25/jbigkit/download/jbigkit-2.1.tar.gz
           tar -xzf /tmp/jbigkit.tar.gz -C /tmp
-          cd /tmp/jbigkit
+          cd /tmp/jbigkit-2.1
           gcc -O2 -static -Ilibjbig -o /tmp/pbmtojbg.exe \
             pbmtools/pbmtojbg.c libjbig/jbig.c libjbig/jbig_ar.c
           mkdir -p "$WORK/vendor"
