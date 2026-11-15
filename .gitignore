@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# Artefatos de terceiros / pesquisa (nao fazem parte do projeto)
+firmware/
+sdk/
+apk/
+*.fot
+*.apk
+*.dex
+
+# Saidas locais
+*.bin
+logs/
+vendor/
+AppDir/
+*.AppImage
+
+# PyInstaller
+*.spec

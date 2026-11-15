@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Open X8 Printer
+Comment=Controle da impressora Marklife X8
+Exec=open-x8-printer
+Icon=open-x8-printer
+Categories=Utility;Printing;
+Terminal=false
+StartupWMClass=open-x8-printer
