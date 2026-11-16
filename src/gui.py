@@ -9,7 +9,7 @@ import subprocess
 import threading
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, font as tkfont, messagebox, ttk
+from tkinter import filedialog, font as tkfont, messagebox, simpledialog, ttk
 
 from PIL import Image, ImageTk
 
@@ -35,9 +35,8 @@ except Exception:  # sem tkinterdnd2: segue sem arrastar-e-soltar
 
 DPI = 8  # dots por mm (203 dpi)
 PAGE_SIZES = {
-    "A4 · 210 × 297 mm": (210, 297),
-    "A5 · 148 × 210 mm": (148, 210),
-    "Letter · 216 × 279 mm": (216, 279),
+    "A4 · 210 mm": (210, 297),
+    "A4 · 216 mm": (216, 297),
 }
 MAX_WIDTH = 1728
 
@@ -158,8 +157,20 @@ class App(BaseTk):
         self.placement_edge: str | None = None
         self.placement_origin: dict | None = None
         self.placement_start: tuple[int, int] | None = None
+        self.crop_mode = False
+        self.crop_box: tuple[float, float, float, float] | None = None
+        self.crop_drag_mode: str | None = None
+        self.crop_edge: str | None = None
+        self.crop_start: tuple[int, int] | None = None
+        self.crop_origin: tuple[float, float, float, float] | None = None
+        self.crop_button: tk.Button | None = None
+        self._placement_photos: list[ImageTk.PhotoImage] = []
+        self.view_bounds: tuple[float, float, float, float] | None = None
+        self.active_guides: tuple[float | None, float | None] = (None, None)
         self._base_cache: dict[int, Image.Image] = {}
         self.page_selections: dict[int, tuple[int, int, int, int]] = {}
+        self.clipboard_placement: dict | None = None
+        self.undo_stack: list[dict] = []
         self.busy = False
 
         self.pages: list[dict] = []
@@ -167,16 +178,19 @@ class App(BaseTk):
         self._page_cache: dict[int, Image.Image] = {}
         self.page_index = tk.IntVar(value=1)
         self.page_total = tk.StringVar(value="de 1")
+        self.page_height_mm = tk.IntVar(value=297)
 
         self.status = tk.StringVar(value="pronta")
         self.device = tk.StringVar(value=DEFAULT_MAC)
         self.devices: dict[str, str] = {}
         self._density_buttons: dict[int, tk.Button] = {}
         self.apply_all = tk.BooleanVar(value=False)
+        self.show_guides = tk.BooleanVar(value=True)
 
         self._build_ui()
         self.apply_all.trace_add("write", lambda *_: self._on_apply_all())
-        self._new_page("A4 · 210 × 297 mm")
+        self.show_guides.trace_add("write", lambda *_: self._on_guides_toggle())
+        self._new_page("A4 · 210 mm")
         self.after(200, self.redraw)
         self.after(300, self.refresh_devices_async)
 
@@ -265,8 +279,8 @@ class App(BaseTk):
         preview = tk.Frame(body, bg=CARD2, highlightbackground=BORDER,
                            highlightthickness=1)
         preview.pack(side="left", fill="both", expand=True)
-        tk.Label(preview, text="Arraste imagens para a página · alças "
-                               "vermelhas = área · Delete remove imagem",
+        tk.Label(preview, text="Arraste imagens · alças vermelhas = área · "
+                               "alças verdes = recorte · Delete remove",
                  bg=CARD2, fg=MUTED, font=(self.font, 9)).pack(
             side="bottom", pady=9)
         self.canvas = tk.Canvas(preview, bg=CARD2, highlightthickness=0)
@@ -280,6 +294,15 @@ class App(BaseTk):
             self.canvas.drop_target_register(DND_FILES)
             self.canvas.dnd_bind("<<Drop>>", self._on_drop)
         self.bind("<Delete>", self._delete_placement)
+        self.bind("<Escape>", self._on_escape)
+        for sequence in ("<Control-c>", "<Control-C>"):
+            self.bind(sequence, self.copy_placement)
+        for sequence in ("<Control-x>", "<Control-X>"):
+            self.bind(sequence, self.cut_placement)
+        for sequence in ("<Control-v>", "<Control-V>"):
+            self.bind(sequence, self.paste_placement)
+        for sequence in ("<Control-z>", "<Control-Z>"):
+            self.bind(sequence, self.undo)
 
         # sidebar --------------------------------------------------------
         outer = tk.Frame(body, bg=BG, width=386)
@@ -356,6 +379,9 @@ class App(BaseTk):
             button.pack(side="left", expand=True, fill="x",
                         padx=(0 if index == 0 else 5, 0))
 
+        self._button(side, "PDF objeto", self.open_pdf_object,
+                     pady=6).pack(fill="x", padx=18, pady=(6, 0))
+
         pdf_row = tk.Frame(side, bg=CARD)
         pdf_row.pack(fill="x", padx=18, pady=(8, 0))
         tk.Label(pdf_row, text="PDF", bg=CARD, fg=MUTED,
@@ -380,14 +406,44 @@ class App(BaseTk):
                  font=(self.font, 10)).pack(side="left")
         self._button(nav, "›", lambda: self.goto_page(self.current_page + 1),
                      size=13, pady=2).pack(side="right")
+        page_actions = tk.Frame(side, bg=CARD)
+        page_actions.pack(fill="x", padx=18, pady=(6, 0))
+        self._button(page_actions, "Nova página", self.new_blank_page,
+                     pady=5).pack(side="left", expand=True, fill="x",
+                                  padx=(0, 5))
+        self._button(page_actions, "Remover página",
+                     self.remove_current_page, pady=5).pack(
+            side="left", expand=True, fill="x")
 
         # pagina
         self._section(side, "Página")
-        self.page_size = tk.StringVar(value="A4 · 210 × 297 mm")
-        page_cb = ttk.Combobox(side, textvariable=self.page_size,
-                               values=list(PAGE_SIZES), state="readonly")
-        page_cb.pack(fill="x", padx=18)
+        self.page_size = tk.StringVar(value="A4 · 210 mm")
+        page_row = tk.Frame(side, bg=CARD)
+        page_row.pack(fill="x", padx=18)
+        page_cb = ttk.Combobox(page_row, textvariable=self.page_size,
+                               values=list(PAGE_SIZES), state="readonly",
+                               width=14)
+        page_cb.pack(side="left", fill="x", expand=True)
         page_cb.bind("<<ComboboxSelected>>", self._on_page_size)
+        tk.Label(page_row, text="×", bg=CARD, fg=MUTED,
+                 font=(self.font, 10)).pack(side="left", padx=4)
+        height_spin = tk.Spinbox(
+            page_row, from_=20, to=1000, width=5,
+            textvariable=self.page_height_mm,
+            command=self._apply_page_geometry, bg=CARD2, fg=FG, bd=0,
+            relief="flat", buttonbackground=CARD2, highlightthickness=1,
+            highlightbackground=BORDER, insertbackground=FG,
+            font=(self.font, 9))
+        height_spin.pack(side="left")
+        height_spin.bind("<Return>",
+                         lambda _e: self._apply_page_geometry())
+        tk.Label(page_row, text="mm", bg=CARD, fg=MUTED,
+                 font=(self.font, 9)).pack(side="left", padx=(2, 4))
+        self._button(page_row, "Aplicar", self._apply_page_geometry,
+                     pady=3, size=9).pack(side="left")
+        self.page_info = tk.Label(side, text="", bg=CARD, fg=MUTED,
+                                  font=(self.mono, 9))
+        self.page_info.pack(anchor="w", padx=18, pady=(4, 0))
 
         # area
         self._section(side, "Área de impressão")
@@ -402,6 +458,34 @@ class App(BaseTk):
         tk.Label(apply_row, text="Aplicar a todas as páginas", bg=CARD,
                  fg=FG, font=(self.font, 10)).pack(side="left")
         Switch(apply_row, self.apply_all, CARD).pack(side="right")
+
+        # objeto selecionado
+        self._section(side, "Objeto")
+        object_row = tk.Frame(side, bg=CARD)
+        object_row.pack(fill="x", padx=18)
+        self.crop_button = self._button(
+            object_row, "Recortar", self.toggle_crop, pady=5)
+        self.crop_button.pack(side="left", expand=True, fill="x",
+                              padx=(0, 5))
+        self._button(object_row, "Auto-recortar", self.auto_trim,
+                     pady=5).pack(side="left", expand=True, fill="x")
+        object_row2 = tk.Frame(side, bg=CARD)
+        object_row2.pack(fill="x", padx=18, pady=(6, 0))
+        self._button(object_row2, "Girar 90°", self.rotate_placement,
+                     pady=5).pack(side="left", expand=True, fill="x",
+                                  padx=(0, 5))
+        self._button(object_row2, "Remover", self._delete_placement,
+                     pady=5).pack(side="left", expand=True, fill="x")
+        self._button(side, "Ajustar área aos objetos",
+                     self.fit_area_to_placements, pady=5).pack(
+            fill="x", padx=18, pady=(6, 0))
+        view_row = tk.Frame(side, bg=CARD)
+        view_row.pack(fill="x", padx=18, pady=(6, 0))
+        self._button(view_row, "Ver página", self.reset_view,
+                     pady=5).pack(side="left", expand=True, fill="x",
+                                  padx=(0, 5))
+        self._button(view_row, "Ver tudo", self.fit_view_to_objects,
+                     pady=5).pack(side="left", expand=True, fill="x")
 
         # qualidade
         self._section(side, "Qualidade")
@@ -445,6 +529,7 @@ class App(BaseTk):
                          self.keep_position)
         self.eject = tk.BooleanVar(value=False)
         self._toggle_row(side, "Ejetar a folha ao terminar", self.eject)
+        self._toggle_row(side, "Guias de alinhamento", self.show_guides)
 
         # papel
         self._section(side, "Papel")
@@ -461,7 +546,25 @@ class App(BaseTk):
 
     # ------------------------------------------------------------- página
     def _new_page(self, label: str) -> None:
-        mm_w, mm_h = PAGE_SIZES.get(label, PAGE_SIZES["A4 · 210 × 297 mm"])
+        mm_w, default_h = PAGE_SIZES.get(label, PAGE_SIZES["A4 · 210 mm"])
+        try:
+            mm_h = int(self.page_height_mm.get())
+        except (tk.TclError, ValueError):
+            mm_h = default_h
+        self._set_page(mm_w, mm_h)
+
+    def _apply_page_geometry(self) -> None:
+        mm_w, _default_h = PAGE_SIZES.get(
+            self.page_size.get(), PAGE_SIZES["A4 · 210 mm"])
+        try:
+            mm_h = int(self.page_height_mm.get())
+        except (tk.TclError, ValueError):
+            mm_h = 297
+        self._set_page(mm_w, mm_h)
+
+    def _set_page(self, mm_w: int, mm_h: int) -> None:
+        mm_h = max(20, min(1000, int(mm_h)))
+        self.page_height_mm.set(mm_h)
         self.page_w = mm_w * DPI
         self.page_h = mm_h * DPI
         self.page_image = Image.new("L", (self.page_w, self.page_h), 255)
@@ -470,11 +573,17 @@ class App(BaseTk):
             index: self.selection for index in range(len(self.pages))}
         self._page_cache.clear()
         self._base_cache.clear()
-        self.selected_placement = None
+        self.undo_stack.clear()
+        self.view_bounds = None
+        self.active_guides = (None, None)
         if self.pages:
-            self._show_page(self.current_page)
+            self._show_page(self.current_page, keep_selection=True)
         else:
             self.redraw()
+        if getattr(self, "page_info", None) is not None:
+            self.page_info.configure(
+                text=f"{mm_w} × {mm_h} mm · "
+                     f"{self.page_w} × {self.page_h} dots")
 
     def _on_page_size(self, _event=None) -> None:
         self._new_page(self.page_size.get())
@@ -483,11 +592,18 @@ class App(BaseTk):
         cw = max(1, self.canvas.winfo_width())
         ch = max(1, self.canvas.winfo_height())
         margin = 28
-        self.scale = min((cw - 2 * margin) / self.page_w,
-                         (ch - 2 * margin) / self.page_h)
-        w = self.page_w * self.scale
-        h = self.page_h * self.scale
-        self.origin = ((cw - w) / 2, (ch - h) / 2)
+        if self.view_bounds:
+            left, top, right, bottom = self.view_bounds
+        else:
+            left, top, right, bottom = 0, 0, self.page_w, self.page_h
+        width = max(1, right - left)
+        height = max(1, bottom - top)
+        self.scale = min((cw - 2 * margin) / width,
+                         (ch - 2 * margin) / height)
+        w = width * self.scale
+        h = height * self.scale
+        self.origin = ((cw - w) / 2 - left * self.scale,
+                       (ch - h) / 2 - top * self.scale)
 
     def redraw(self) -> None:
         if not self.page_w:
@@ -503,12 +619,33 @@ class App(BaseTk):
         self.canvas.create_rectangle(ox, oy, ox + w, oy + h, fill="white",
                                      outline=BORDER)
 
-        if self.page_image.size != (1, 1):
-            disp = self.page_image.resize(
-                (max(1, int(w)), max(1, int(h))), Image.LANCZOS)
-            self.photo = ImageTk.PhotoImage(disp)
-            self.canvas.create_image(ox, oy, image=self.photo, anchor="nw")
+        base = None
+        if self.pages:
+            try:
+                base = self._render_base(self.current_page)
+            except Exception:
+                base = None
+        if base is None:
+            base = Image.new("L", (self.page_w, self.page_h), 255)
+        disp = base.resize((max(1, int(w)), max(1, int(h))),
+                           Image.LANCZOS)
+        self.photo = ImageTk.PhotoImage(disp)
+        self.canvas.create_image(ox, oy, image=self.photo, anchor="nw")
 
+        self._placement_photos = []
+        if self.pages:
+            for placement in self._placements():
+                px0, py0, px1, py1 = self._placement_rect(placement)
+                pw = max(1, int(round(px1 - px0)))
+                ph = max(1, int(round(py1 - py0)))
+                image = placement["image"].convert("L").resize(
+                    (pw, ph), Image.LANCZOS)
+                photo = ImageTk.PhotoImage(image)
+                self._placement_photos.append(photo)
+                self.canvas.create_image(px0, py0, image=photo,
+                                         anchor="nw")
+
+        self._draw_guides()
         if self.selection:
             self._draw_selection()
         else:
@@ -557,6 +694,18 @@ class App(BaseTk):
         self._update_sel_label()
 
     def _on_motion(self, event) -> None:
+        if self.crop_mode:
+            crop_rect = self._crop_canvas_rect()
+            if crop_rect:
+                if self._handle_at(event.x, event.y, crop_rect):
+                    self.canvas.configure(cursor="sizing")
+                elif (crop_rect[0] <= event.x <= crop_rect[2] and
+                      crop_rect[1] <= event.y <= crop_rect[3]):
+                    self.canvas.configure(cursor="fleur")
+                else:
+                    self.canvas.configure(cursor="crosshair")
+            return
+
         placements = self._placements()
         if (self.selected_placement is not None and
                 0 <= self.selected_placement < len(placements)):
@@ -618,12 +767,18 @@ class App(BaseTk):
 
     def _draw_placement_selection(self) -> None:
         self.canvas.delete("placement")
+        self.canvas.delete("crop")
         placements = self._placements()
         if (self.selected_placement is None or
                 not 0 <= self.selected_placement < len(placements)):
             return
         placement = placements[self.selected_placement]
         x0, y0, x1, y1 = self._placement_rect(placement)
+        if self.crop_mode and self.crop_box:
+            self.canvas.create_rectangle(x0, y0, x1, y1, outline=ACCENT,
+                                         width=1, tags="placement")
+            self._draw_crop_overlay()
+            return
         self.canvas.create_rectangle(x0, y0, x1, y1, outline=ACCENT,
                                      width=2, tags="placement")
         xs = (x0, (x0 + x1) / 2, x1)
@@ -637,6 +792,78 @@ class App(BaseTk):
             x0 + 2, y0 - 6,
             text=f"{placement['w'] / DPI:.1f} × {placement['h'] / DPI:.1f} mm",
             anchor="sw", fill=ACCENT, font=(self.font, 8), tags="placement")
+
+    # ------------------------------------------------------------- guias
+    def _on_guides_toggle(self) -> None:
+        if not self.show_guides.get():
+            self.active_guides = (None, None)
+            self.redraw()
+
+    def _guide_anchors(self, axis: str, exclude: int | None) -> list[float]:
+        if axis == "x":
+            anchors = [0.0, self.page_w / 2.0, float(self.page_w)]
+        else:
+            anchors = [0.0, self.page_h / 2.0, float(self.page_h)]
+        for index, placement in enumerate(self._placements()):
+            if index == exclude:
+                continue
+            if axis == "x":
+                anchors += [placement["x"],
+                            placement["x"] + placement["w"] / 2,
+                            placement["x"] + placement["w"]]
+            else:
+                anchors += [placement["y"],
+                            placement["y"] + placement["h"] / 2,
+                            placement["y"] + placement["h"]]
+        return anchors
+
+    def _snap_threshold(self) -> float:
+        return max(4.0, min(24.0, 10.0 / max(self.scale, 0.01)))
+
+    def _snap_move(self, value: float, size: float, axis: str,
+                   exclude: int | None) -> tuple[float, float | None]:
+        threshold = self._snap_threshold()
+        best = None
+        for anchor in self._guide_anchors(axis, exclude):
+            for offset in (0.0, size / 2, size):
+                candidate = anchor - offset
+                distance = abs(value - candidate)
+                if distance <= threshold and (best is None or
+                                              distance < best[0]):
+                    best = (distance, candidate, anchor)
+        if best:
+            return best[1], best[2]
+        return value, None
+
+    def _snap_edge(self, value: float, axis: str,
+                   exclude: int | None) -> tuple[float, float | None]:
+        threshold = self._snap_threshold()
+        best = None
+        for anchor in self._guide_anchors(axis, exclude):
+            distance = abs(value - anchor)
+            if distance <= threshold and (best is None or
+                                          distance < best[0]):
+                best = (distance, anchor)
+        if best:
+            return best[1], best[1]
+        return value, None
+
+    def _draw_guides(self) -> None:
+        self.canvas.delete("guides")
+        guide_x, guide_y = self.active_guides
+        if guide_x is None and guide_y is None:
+            return
+        ox, oy = self.origin
+        cw = max(1, self.canvas.winfo_width())
+        ch = max(1, self.canvas.winfo_height())
+        if guide_x is not None:
+            x = ox + guide_x * self.scale
+            self.canvas.create_line(x, 0, x, ch, fill=GREEN, dash=(5, 5),
+                                    width=1, tags="guides")
+        if guide_y is not None:
+            y = oy + guide_y * self.scale
+            self.canvas.create_line(0, y, cw, y, fill=GREEN, dash=(5, 5),
+                                    width=1, tags="guides")
 
     def _refresh_page(self) -> None:
         if not self.pages:
@@ -665,52 +892,458 @@ class App(BaseTk):
         except Exception as exc:
             messagebox.showerror("Imagem", f"{Path(path).name}: {exc}")
             return
+        self._add_pil_placement(image, canvas_x, canvas_y,
+                                label=Path(path).name)
 
+    def _add_pil_placement(self, image: Image.Image,
+                           canvas_x: float | None = None,
+                           canvas_y: float | None = None,
+                           label: str = "imagem",
+                           native: bool = False) -> None:
+        image = image.convert("L")
         if not self.pages:
             self.pages = [{"kind": "blank", "placements": []}]
             self.page_spin.configure(to=1)
             self._show_page(0)
 
+        self._push_undo()
         placements = self._placements()
-        max_w = int(self.page_w * 0.75)
-        max_h = int(self.page_h * 0.75)
-        scale = min(max_w / image.width, max_h / image.height, 4.0)
-        width = max(1, int(image.width * scale))
-        height = max(1, int(image.height * scale))
+        if native:
+            width, height = image.width, image.height
+        else:
+            max_w = int(self.page_w * 0.75)
+            max_h = int(self.page_h * 0.75)
+            scale = min(max_w / image.width, max_h / image.height, 4.0)
+            width = max(1, int(image.width * scale))
+            height = max(1, int(image.height * scale))
 
         if canvas_x is None or canvas_y is None:
             px, py = self.page_w // 2, self.page_h // 2
         else:
-            px, py = self._canvas_to_page(canvas_x, canvas_y)
-        x = max(0, min(self.page_w - width, int(px - width / 2)))
-        y = max(0, min(self.page_h - height, int(py - height / 2)))
+            px, py = self._canvas_to_page_unclamped(canvas_x, canvas_y)
+        x = int(px - width / 2)
+        y = int(py - height / 2)
+        if not native:
+            x = max(0, min(self.page_w - width, x))
+            y = max(0, min(self.page_h - height, y))
 
         placements.append({"image": image, "x": x, "y": y,
                            "w": width, "h": height})
         self.selected_placement = len(placements) - 1
 
-        if len(placements) == 1 and self.pages[self.current_page]["kind"] == "blank":
-            self.selection = (x, y, x + width, y + height)
-            self._store_selection()
+        if self.pages[self.current_page]["kind"] == "blank":
+            area = self._placements_area()
+            if area:
+                self.selection = area
+                self._store_selection()
 
         self._refresh_page()
+        if (x < 0 or y < 0 or x + width > self.page_w or
+                y + height > self.page_h):
+            self.fit_view_to_objects()
         self.status.set(
-            f"imagem {width / DPI:.1f} × {height / DPI:.1f} mm · "
+            f"{label} · {width / DPI:.1f} × {height / DPI:.1f} mm · "
             "arraste para mover · Delete remove")
+
+    def open_pdf_object(self) -> None:
+        path = filedialog.askopenfilename(filetypes=[("PDF", "*.pdf")])
+        if not path:
+            return
+        count = self._pdf_page_count(path)
+        if count <= 0:
+            messagebox.showerror("PDF", "Não foi possível abrir o PDF.")
+            return
+        page = simpledialog.askinteger(
+            "PDF como objeto",
+            f"Qual página de “{Path(path).name}”? (1–{count})",
+            parent=self, minvalue=1, maxvalue=count, initialvalue=1)
+        if not page:
+            return
+        try:
+            image = self._pdf_page_image(path, page)
+        except Exception as exc:
+            messagebox.showerror("PDF", str(exc))
+            return
+
+        # Se a página atual é exatamente essa página do PDF, ela vira um
+        # objeto editável (sem manter o PDF inteiro como fundo).
+        if self.pages:
+            entry = self.pages[self.current_page]
+            if (entry.get("kind") == "pdf" and entry.get("path") == path and
+                    entry.get("index") == page and
+                    not entry.get("placements")):
+                self.pages[self.current_page] = {"kind": "blank",
+                                                 "placements": []}
+                self._page_cache.pop(self.current_page, None)
+                self._base_cache.pop(self.current_page, None)
+
+        self._add_pil_placement(
+            image, label=f"{Path(path).name} · pág. {page}",
+            native=True)
+
+    def new_blank_page(self) -> None:
+        self.pages.append({"kind": "blank", "placements": []})
+        self.page_spin.configure(to=len(self.pages))
+        self._show_page(len(self.pages) - 1)
+
+    def remove_current_page(self) -> None:
+        if not self.pages:
+            self.status.set("nenhuma página")
+            return
+        count = len(self.pages)
+        if not messagebox.askyesno(
+                "Remover página",
+                f"Remover a página {self.current_page + 1} de {count} "
+                "e todo o seu conteúdo?"):
+            return
+        if self.crop_mode:
+            self.cancel_crop()
+        index = self.current_page
+        self.pages.pop(index)
+        self._page_cache.clear()
+        self._base_cache.clear()
+        self.page_selections.clear()
+        self.undo_stack.clear()
+        self.selected_placement = None
+        if not self.pages:
+            self.pages = [{"kind": "blank", "placements": []}]
+            self.current_page = 0
+            self.page_spin.configure(to=1)
+            self._show_page(0)
+            self.status.set("página removida · nova página em branco")
+            return
+        self.current_page = min(index, len(self.pages) - 1)
+        self.page_spin.configure(to=len(self.pages))
+        self._show_page(self.current_page)
+        self.status.set(
+            f"página removida · {len(self.pages)} restante(s)")
 
     def _delete_placement(self, _event=None) -> None:
         widget = self.focus_get()
-        if isinstance(widget, (tk.Entry, tk.Text, tk.Spinbox,
-                               ttk.Entry, ttk.Combobox)):
+        if isinstance(widget, tk.Text):
             return
+        if isinstance(widget, (tk.Entry, tk.Spinbox, ttk.Entry, ttk.Combobox)):
+            try:
+                if str(widget.cget("state")) != "readonly":
+                    return
+            except tk.TclError:
+                return
+        if self.crop_mode:
+            self.cancel_crop()
         placements = self._placements()
         if (self.selected_placement is None or
                 not 0 <= self.selected_placement < len(placements)):
             return
+        self._push_undo()
         del placements[self.selected_placement]
         self.selected_placement = None
         self._refresh_page()
-        self.status.set("imagem removida")
+        self.status.set("objeto removido")
+
+    def _selected_placement(self) -> tuple[int | None, dict | None]:
+        placements = self._placements()
+        if (self.selected_placement is None or
+                not 0 <= self.selected_placement < len(placements)):
+            return None, None
+        return self.selected_placement, placements[self.selected_placement]
+
+    # ------------------------------------------------------ clipboard/undo
+    def _text_focus(self) -> bool:
+        widget = self.focus_get()
+        if isinstance(widget, tk.Text):
+            return True
+        if isinstance(widget, (tk.Entry, tk.Spinbox, ttk.Entry, ttk.Combobox)):
+            try:
+                return str(widget.cget("state")) != "readonly"
+            except tk.TclError:
+                return True
+        return False
+
+    def _push_undo(self) -> None:
+        if not self.pages:
+            return
+        self.undo_stack.append({
+            "page": self.current_page,
+            "placements": [dict(p) for p in self._placements()],
+            "selection": self.selection,
+            "page_selections": dict(self.page_selections),
+            "selected": self.selected_placement,
+        })
+        if len(self.undo_stack) > 50:
+            self.undo_stack.pop(0)
+
+    def undo(self, _event=None) -> None:
+        if self._text_focus():
+            return
+        if self.crop_mode:
+            self.cancel_crop()
+            return
+        if not self.undo_stack:
+            self.status.set("nada para desfazer")
+            return
+        state = self.undo_stack.pop()
+        page = state["page"]
+        if page >= len(self.pages):
+            return
+        self.pages[page]["placements"] = [dict(p) for p in state["placements"]]
+        self.page_selections = dict(state["page_selections"])
+        self.selection = state["selection"]
+        self.selected_placement = state["selected"]
+        self.crop_mode = False
+        self.crop_box = None
+        if self.crop_button:
+            self.crop_button.configure(text="Recortar")
+        self.current_page = page
+        self._page_cache.pop(page, None)
+        self.page_image = self._render_page(page)
+        self._page_cache[page] = self.page_image
+        self.page_index.set(page + 1)
+        self.page_total.set(f"de {len(self.pages)}")
+        self.page_spin.configure(to=max(1, len(self.pages)))
+        self.redraw()
+        self.status.set("desfeito")
+
+    def copy_placement(self, _event=None) -> None:
+        if self._text_focus():
+            return
+        _index, placement = self._selected_placement()
+        if not placement:
+            self.status.set("selecione um objeto para copiar")
+            return
+        self.clipboard_placement = {
+            "image": placement["image"],
+            "w": placement["w"],
+            "h": placement["h"],
+            "x": placement["x"],
+            "y": placement["y"],
+        }
+        self.status.set("objeto copiado")
+
+    def cut_placement(self, _event=None) -> None:
+        if self._text_focus():
+            return
+        if not self._selected_placement()[1]:
+            self.status.set("selecione um objeto para recortar")
+            return
+        self.copy_placement()
+        self._delete_placement()
+        self.status.set("objeto recortado")
+
+    def paste_placement(self, _event=None) -> None:
+        if self._text_focus():
+            return
+        clip = self.clipboard_placement
+        if not clip:
+            self.status.set("nada para colar")
+            return
+        if not self.pages:
+            self.pages = [{"kind": "blank", "placements": []}]
+            self.page_spin.configure(to=1)
+            self._show_page(0)
+        self._push_undo()
+        width, height = clip["w"], clip["h"]
+        x = clip.get("x", 0) + 16
+        y = clip.get("y", 0) + 16
+        placements = self._placements()
+        placements.append({"image": clip["image"], "x": x, "y": y,
+                           "w": width, "h": height})
+        self.selected_placement = len(placements) - 1
+        self._refresh_page()
+        if self.pages[self.current_page]["kind"] == "blank":
+            self.fit_area_to_placements()
+        if (x < 0 or y < 0 or x + width > self.page_w or
+                y + height > self.page_h):
+            self.fit_view_to_objects()
+        self.status.set("objeto colado")
+
+    def _placements_area(self) -> tuple[int, int, int, int] | None:
+        placements = self._placements()
+        if not placements:
+            return None
+        left = min(p["x"] for p in placements)
+        top = min(p["y"] for p in placements)
+        right = max(p["x"] + p["w"] for p in placements)
+        bottom = max(p["y"] + p["h"] for p in placements)
+        left = max(0, min(self.page_w, int(round(left))))
+        top = max(0, min(self.page_h, int(round(top))))
+        right = max(0, min(self.page_w, int(round(right))))
+        bottom = max(0, min(self.page_h, int(round(bottom))))
+        if right - left < 8 or bottom - top < 8:
+            return (0, 0, self.page_w, self.page_h)
+        return (left, top, right, bottom)
+
+    def fit_area_to_placements(self) -> None:
+        area = self._placements_area()
+        if not area:
+            self.status.set("nenhum objeto na página")
+            return
+        self.selection = area
+        self._store_selection()
+        self.redraw()
+        self.status.set("área ajustada aos objetos")
+
+    def fit_view_to_objects(self) -> None:
+        placements = self._placements()
+        if not placements:
+            self.reset_view()
+            return
+        left, top = 0, 0
+        right, bottom = self.page_w, self.page_h
+        for placement in placements:
+            left = min(left, placement["x"])
+            top = min(top, placement["y"])
+            right = max(right, placement["x"] + placement["w"])
+            bottom = max(bottom, placement["y"] + placement["h"])
+        self.view_bounds = (left, top, right, bottom)
+        self.redraw()
+        self.status.set("visualização ajustada aos objetos")
+
+    def reset_view(self) -> None:
+        self.view_bounds = None
+        self.redraw()
+        self.status.set("visualização da página")
+
+    def auto_trim(self) -> None:
+        _index, placement = self._selected_placement()
+        if not placement:
+            self.status.set("selecione um objeto")
+            return
+        image = placement["image"].convert("L")
+        mask = image.point(lambda value: 255 if value < 245 else 0)
+        box = mask.getbbox()
+        if not box:
+            self.status.set("objeto vazio")
+            return
+        if box == (0, 0, image.width, image.height):
+            self.status.set("nada para recortar")
+            return
+        self._push_undo()
+        x0, y0, x1, y1 = box
+        width, height = image.size
+        placement["x"] += placement["w"] * (x0 / width)
+        placement["y"] += placement["h"] * (y0 / height)
+        placement["w"] *= (x1 - x0) / width
+        placement["h"] *= (y1 - y0) / height
+        placement["image"] = image.crop(box)
+        self._refresh_page()
+        self.status.set("margens recortadas")
+
+    def rotate_placement(self) -> None:
+        _index, placement = self._selected_placement()
+        if not placement:
+            self.status.set("selecione um objeto")
+            return
+        self._push_undo()
+        image = placement["image"].rotate(-90, expand=True, fillcolor=255)
+        center_x = placement["x"] + placement["w"] / 2
+        center_y = placement["y"] + placement["h"] / 2
+        new_w, new_h = placement["h"], placement["w"]
+        scale = min(1.0, self.page_w / new_w, self.page_h / new_h)
+        new_w *= scale
+        new_h *= scale
+        placement["image"] = image
+        placement["w"], placement["h"] = new_w, new_h
+        placement["x"] = min(max(0, center_x - new_w / 2),
+                             self.page_w - new_w)
+        placement["y"] = min(max(0, center_y - new_h / 2),
+                             self.page_h - new_h)
+        self._refresh_page()
+        self.status.set("objeto girado 90°")
+
+    # ------------------------------------------------------------- recorte
+    def _crop_canvas_rect(self) -> tuple[float, float, float, float] | None:
+        _index, placement = self._selected_placement()
+        if not placement or not self.crop_box:
+            return None
+        px0, py0, px1, py1 = self._placement_rect(placement)
+        nx0, ny0, nx1, ny1 = self.crop_box
+        return (px0 + (px1 - px0) * nx0, py0 + (py1 - py0) * ny0,
+                px0 + (px1 - px0) * nx1, py0 + (py1 - py0) * ny1)
+
+    def _draw_crop_overlay(self) -> None:
+        self.canvas.delete("crop")
+        _index, placement = self._selected_placement()
+        crop_rect = self._crop_canvas_rect()
+        if not placement or not crop_rect:
+            return
+        px0, py0, px1, py1 = self._placement_rect(placement)
+        x0, y0, x1, y1 = crop_rect
+        for rect in ((px0, py0, px1, y0), (px0, y1, px1, py1),
+                     (px0, y0, x0, y1), (x1, y0, px1, y1)):
+            if rect[2] > rect[0] and rect[3] > rect[1]:
+                self.canvas.create_rectangle(
+                    *rect, fill="#000000", stipple="gray50",
+                    outline="", tags="crop")
+        self.canvas.create_rectangle(x0, y0, x1, y1, outline=GREEN,
+                                     width=2, tags="crop")
+        xs = (x0, (x0 + x1) / 2, x1)
+        ys = (y0, (y0 + y1) / 2, y1)
+        for py in ys:
+            for px in xs:
+                self.canvas.create_rectangle(
+                    px - 4, py - 4, px + 4, py + 4, fill="white",
+                    outline=GREEN, width=2, tags="crop")
+        self.canvas.create_text(
+            x0 + 2, y0 - 6, text="recorte", anchor="sw", fill=GREEN,
+            font=(self.font, 8), tags="crop")
+
+    def toggle_crop(self) -> None:
+        if self.crop_mode:
+            self.apply_crop()
+            return
+        _index, placement = self._selected_placement()
+        if not placement:
+            self.status.set("selecione um objeto para recortar")
+            return
+        self.crop_mode = True
+        self.crop_box = (0.0, 0.0, 1.0, 1.0)
+        if self.crop_button:
+            self.crop_button.configure(text="Aplicar recorte")
+        self._draw_placement_selection()
+        self.status.set("ajuste as alças verdes e clique em Aplicar "
+                        "(Esc cancela)")
+
+    def apply_crop(self) -> None:
+        if not self.crop_mode:
+            return
+        _index, placement = self._selected_placement()
+        if not placement or not self.crop_box:
+            self.cancel_crop()
+            return
+        nx0, ny0, nx1, ny1 = self.crop_box
+        image = placement["image"]
+        width, height = image.size
+        box = (int(round(nx0 * width)), int(round(ny0 * height)),
+               int(round(nx1 * width)), int(round(ny1 * height)))
+        if box[2] - box[0] < 1 or box[3] - box[1] < 1:
+            self.cancel_crop()
+            return
+        self._push_undo()
+        placement["image"] = image.crop(box)
+        placement["x"] += placement["w"] * nx0
+        placement["y"] += placement["h"] * ny0
+        placement["w"] *= nx1 - nx0
+        placement["h"] *= ny1 - ny0
+        self.crop_mode = False
+        self.crop_box = None
+        if self.crop_button:
+            self.crop_button.configure(text="Recortar")
+        self._refresh_page()
+        self.status.set("recorte aplicado")
+
+    def cancel_crop(self) -> None:
+        if not self.crop_mode:
+            return
+        self.crop_mode = False
+        self.crop_box = None
+        if self.crop_button:
+            self.crop_button.configure(text="Recortar")
+        self._draw_placement_selection()
+        self.status.set("recorte cancelado")
+
+    def _on_escape(self, _event=None) -> None:
+        if self.crop_mode:
+            self.cancel_crop()
 
     # ------------------------------------------------------------ seleção
     def _canvas_to_page(self, x: float, y: float) -> tuple[int, int]:
@@ -720,25 +1353,51 @@ class App(BaseTk):
         return (max(0, min(self.page_w, px)),
                 max(0, min(self.page_h, py)))
 
+    def _canvas_to_page_unclamped(self, x: float, y: float) -> tuple[float, float]:
+        ox, oy = self.origin
+        return ((x - ox) / self.scale, (y - oy) / self.scale)
+
     def _on_press(self, event) -> None:
+        self.canvas.focus_set()
+        self.active_guides = (None, None)
+        if self.crop_mode:
+            crop_rect = self._crop_canvas_rect()
+            if crop_rect:
+                handle = self._handle_at(event.x, event.y, crop_rect)
+                if handle:
+                    self.crop_drag_mode = "resize"
+                    self.crop_edge = handle
+                    self.crop_start = self._canvas_to_page_unclamped(event.x, event.y)
+                    self.crop_origin = self.crop_box
+                    return
+                if (crop_rect[0] <= event.x <= crop_rect[2] and
+                        crop_rect[1] <= event.y <= crop_rect[3]):
+                    self.crop_drag_mode = "move"
+                    self.crop_start = self._canvas_to_page_unclamped(event.x, event.y)
+                    self.crop_origin = self.crop_box
+                    return
+            return
+
         placements = self._placements()
         if (self.selected_placement is not None and
                 0 <= self.selected_placement < len(placements)):
             rect = self._placement_rect(placements[self.selected_placement])
             handle = self._handle_at(event.x, event.y, rect)
             if handle:
+                self._push_undo()
                 self.placement_drag_mode = "resize"
                 self.placement_edge = handle
-                self.placement_start = self._canvas_to_page(event.x, event.y)
+                self.placement_start = self._canvas_to_page_unclamped(event.x, event.y)
                 self.placement_origin = dict(
                     placements[self.selected_placement])
                 return
 
         hit = self._placement_at(event.x, event.y)
         if hit is not None:
+            self._push_undo()
             self.selected_placement = hit
             self.placement_drag_mode = "move"
-            self.placement_start = self._canvas_to_page(event.x, event.y)
+            self.placement_start = self._canvas_to_page_unclamped(event.x, event.y)
             self.placement_origin = dict(placements[hit])
             self._draw_placement_selection()
             return
@@ -771,22 +1430,65 @@ class App(BaseTk):
             dash=(4, 3), tags="rubber")
 
     def _on_drag(self, event) -> None:
+        if self.crop_mode:
+            if not (self.crop_drag_mode and self.crop_origin and
+                    self.crop_start):
+                return
+            _index, placement = self._selected_placement()
+            if not placement:
+                return
+            px, py = self._canvas_to_page_unclamped(event.x, event.y)
+            sx, sy = self.crop_start
+            nx0, ny0, nx1, ny1 = self.crop_origin
+            if self.crop_drag_mode == "move":
+                dx = (px - sx) / placement["w"]
+                dy = (py - sy) / placement["h"]
+                dx = max(-nx0, min(1 - nx1, dx))
+                dy = max(-ny0, min(1 - ny1, dy))
+                nx0 += dx
+                nx1 += dx
+                ny0 += dy
+                ny1 += dy
+            else:
+                nx = (px - placement["x"]) / placement["w"]
+                ny = (py - placement["y"]) / placement["h"]
+                edge = self.crop_edge or ""
+                if "w" in edge:
+                    nx0 = min(nx, nx1 - 0.02)
+                if "e" in edge:
+                    nx1 = max(nx, nx0 + 0.02)
+                if "n" in edge:
+                    ny0 = min(ny, ny1 - 0.02)
+                if "s" in edge:
+                    ny1 = max(ny, ny0 + 0.02)
+                nx0 = max(0.0, nx0)
+                ny0 = max(0.0, ny0)
+                nx1 = min(1.0, nx1)
+                ny1 = min(1.0, ny1)
+            self.crop_box = (nx0, ny0, nx1, ny1)
+            self._draw_crop_overlay()
+            return
+
         if self.placement_drag_mode and self.selected_placement is not None:
             placements = self._placements()
             if (self.placement_origin and self.placement_start and
                     0 <= self.selected_placement < len(placements)):
                 origin = self.placement_origin
                 current = placements[self.selected_placement]
-                px, py = self._canvas_to_page(event.x, event.y)
+                px, py = self._canvas_to_page_unclamped(event.x, event.y)
                 sx, sy = self.placement_start
                 if self.placement_drag_mode == "move":
-                    dx, dy = px - sx, py - sy
-                    dx = max(-origin["x"], min(
-                        self.page_w - origin["x"] - origin["w"], dx))
-                    dy = max(-origin["y"], min(
-                        self.page_h - origin["y"] - origin["h"], dy))
-                    current["x"] = origin["x"] + dx
-                    current["y"] = origin["y"] + dy
+                    new_x = origin["x"] + (px - sx)
+                    new_y = origin["y"] + (py - sy)
+                    if self.show_guides.get():
+                        new_x, guide_x = self._snap_move(
+                            new_x, origin["w"], "x", self.selected_placement)
+                        new_y, guide_y = self._snap_move(
+                            new_y, origin["h"], "y", self.selected_placement)
+                        self.active_guides = (guide_x, guide_y)
+                    else:
+                        self.active_guides = (None, None)
+                    current["x"], current["y"] = new_x, new_y
                 else:
                     left, top = origin["x"], origin["y"]
                     right = left + origin["w"]
@@ -800,13 +1502,37 @@ class App(BaseTk):
                         top = min(py, bottom - 8)
                     if "s" in edge:
                         bottom = max(py, top + 8)
-                    left = max(0, left)
-                    top = max(0, top)
-                    right = min(self.page_w, right)
-                    bottom = min(self.page_h, bottom)
+                    if self.show_guides.get():
+                        guide_x = guide_y = None
+                        if "w" in edge:
+                            left, guide_x = self._snap_edge(
+                                left, "x", self.selected_placement)
+                        if "e" in edge:
+                            right, guide_x = self._snap_edge(
+                                right, "x", self.selected_placement)
+                        if "n" in edge:
+                            top, guide_y = self._snap_edge(
+                                top, "y", self.selected_placement)
+                        if "s" in edge:
+                            bottom, guide_y = self._snap_edge(
+                                bottom, "y", self.selected_placement)
+                        self.active_guides = (guide_x, guide_y)
+                    else:
+                        self.active_guides = (None, None)
+                    if right - left < 8:
+                        if "w" in edge:
+                            left = right - 8
+                        else:
+                            right = left + 8
+                    if bottom - top < 8:
+                        if "n" in edge:
+                            top = bottom - 8
+                        else:
+                            bottom = top + 8
                     current["x"], current["y"] = left, top
                     current["w"], current["h"] = right - left, bottom - top
-                self._refresh_page()
+                self._page_cache.pop(self.current_page, None)
+                self.redraw()
             return
 
         if not self.drag_start:
@@ -850,11 +1576,19 @@ class App(BaseTk):
         self._draw_selection()
 
     def _on_release(self, event) -> None:
+        if self.crop_drag_mode:
+            self.crop_drag_mode = None
+            self.crop_edge = None
+            self.crop_start = None
+            self.crop_origin = None
+            return
+
         if self.placement_drag_mode:
             self.placement_drag_mode = None
             self.placement_edge = None
             self.placement_origin = None
             self.placement_start = None
+            self.active_guides = (None, None)
             self._refresh_page()
             placements = self._placements()
             if (self.selected_placement is not None and
@@ -920,7 +1654,7 @@ class App(BaseTk):
         page.paste(image, (x, 0))
         return page
 
-    def _render_pdf(self, path: str, number: int) -> Image.Image:
+    def _pdf_page_image(self, path: str, number: int) -> Image.Image:
         if fitz is None:
             raise RuntimeError("PyMuPDF não está instalado")
         doc = fitz.open(path)
@@ -930,11 +1664,13 @@ class App(BaseTk):
             pix = page.get_pixmap(
                 matrix=fitz.Matrix(zoom, zoom),
                 colorspace=fitz.csGRAY, alpha=False)
-            image = Image.frombytes(
+            return Image.frombytes(
                 "L", (pix.width, pix.height), pix.samples)
-            return self._fit_page(image)
         finally:
             doc.close()
+
+    def _render_pdf(self, path: str, number: int) -> Image.Image:
+        return self._fit_page(self._pdf_page_image(path, number))
 
     def _render_base(self, index: int) -> Image.Image:
         if index in self._base_cache:
@@ -967,7 +1703,15 @@ class App(BaseTk):
         self._page_cache.clear()
         self._base_cache.clear()
         self.page_selections.clear()
+        self.undo_stack.clear()
+        self.view_bounds = None
+        self.active_guides = (None, None)
         self.selected_placement = None
+        self.crop_mode = False
+        self.crop_box = None
+        self.crop_drag_mode = None
+        if self.crop_button:
+            self.crop_button.configure(text="Recortar")
         self.selection = (0, 0, self.page_w, self.page_h)
 
     def _default_selection(self, index: int) -> tuple[int, int, int, int]:
@@ -989,9 +1733,17 @@ class App(BaseTk):
             pass
         return (0, 0, self.page_w, self.page_h)
 
-    def _show_page(self, index: int) -> None:
+    def _show_page(self, index: int, keep_selection: bool = False) -> None:
         if not self.pages:
             return
+        if self.crop_mode:
+            self.crop_mode = False
+            self.crop_box = None
+            self.crop_drag_mode = None
+            if self.crop_button:
+                self.crop_button.configure(text="Recortar")
+        self.view_bounds = None
+        self.active_guides = (None, None)
         index = max(0, min(len(self.pages) - 1, index))
         self.current_page = index
         if index not in self._page_cache:
@@ -1009,7 +1761,8 @@ class App(BaseTk):
         self.page_index.set(index + 1)
         self.page_total.set(f"de {len(self.pages)}")
         self.page_spin.configure(to=max(1, len(self.pages)))
-        self.selected_placement = None
+        if not keep_selection:
+            self.selected_placement = None
         if self.apply_all.get():
             for i in range(len(self.pages)):
                 self.page_selections[i] = self.selection
@@ -1107,7 +1860,11 @@ class App(BaseTk):
                     keep_position: bool) -> tuple[bytes, int, int]:
         if not selection:
             selection = (0, 0, self.page_w, self.page_h)
-        x0, y0, x1, y1 = selection
+        x0, y0, x1, y1 = (int(round(value)) for value in selection)
+        x0 = max(0, min(self.page_w, x0))
+        y0 = max(0, min(self.page_h, y0))
+        x1 = max(x0 + 1, min(self.page_w, x1))
+        y1 = max(y0 + 1, min(self.page_h, y1))
         crop = image.crop((x0, y0, x1, y1))
 
         if keep_position:
@@ -1149,8 +1906,11 @@ class App(BaseTk):
         return data, width, height
 
     def _job(self) -> tuple[bytes, int, int]:
+        image = self.page_image
+        if self.pages:
+            image = self._render_page(self.current_page)
         return self._job_for(
-            self.page_image, self.selection, self.keep_position.get(),
+            image, self.selection, self.keep_position.get(),
             self.density.get(), self.speed.get(), self.algorithm.get(),
             2 if self.eject.get() else 1)
 

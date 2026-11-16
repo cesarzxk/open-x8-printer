@@ -110,15 +110,34 @@ Recursos:
 - **Arraste imagens do sistema de arquivos para a página** (drag-and-drop):
   a imagem vira um objeto que pode ser **movido** e **redimensionado**;
   **Delete** remove a imagem selecionada
+- **Guias de alinhamento** com encaixe nas bordas e no centro da página,
+  nas linhas médias vertical/horizontal e também nas bordas/centros de
+  outros objetos; podem ser desligadas em **Opções**
+- **Ctrl+C / Ctrl+X / Ctrl+V**: copiar, recortar e colar objetos — inclusive
+  entre páginas; **Ctrl+Z** desfaz as últimas operações (até 50)
 - A imagem colocada é independente da área de impressão vermelha — uma pode
   ser ajustada sem mexer na outra
+- **PDF como objeto**: importe uma página de PDF como objeto editável em
+  **tamanho real (203 dpi), sem redução automática**; pode ultrapassar a
+  página. Use **Ver tudo** para enquadrar o objeto e acessar as alças
+- Objetos podem ultrapassar a página; a **área de impressão fica limitada à
+  folha**, e o excedente é cortado na impressão
+- **Recortar, auto-recortar de margens e girar 90°** em qualquer objeto
+- **Ver página / Ver tudo** para alternar entre o enquadramento da folha e o
+  enquadramento que inclui objetos fora dela
+- **Combinar páginas**: crie uma **Nova página** e adicione várias páginas de
+  PDF como objetos; use **Ajustar área aos objetos** para imprimir tudo em
+  uma única folha
 - **Área de impressão fixa** em cada página, com **alças** para
   redimensionar e arraste interno para mover
 - Cada página pode ter **sua própria área**; o switch **Aplicar a todas as
   páginas** replica a área atual para o documento inteiro
 - **Múltiplas páginas**: abra várias imagens de uma vez ou um PDF completo;
   navegue com **‹ ›** e o campo de página; **Todas** imprime a sequência
-- Página **A4, A5 ou Letter** em escala real (203 dpi)
+- **Remover página** (com confirmação) e **Nova página** para montagens
+- Página **A4** em duas larguras: **210 mm** (1680 dots) ou **216 mm**
+  (1728 dots), com **altura customizável** (20–1000 mm, padrão 297 mm),
+  em escala real (203 dpi)
 - O painel mostra as dimensões da área em mm e dots
 - “Selecionar página inteira” para resetar a área
 - Densidade **Clara / Normal / Escura** e velocidade, como no app
@@ -142,6 +161,16 @@ Validação offline: o job gerado pela interface foi decodificado de volta
 Imagem arrastada para a página, com alças de mover/redimensionar:
 
 ![Imagem arrastada](docs/imagem-arrastada.png)
+
+PDF importado como objeto, em modo de recorte (verde) e área de impressão
+(vermelha):
+
+![PDF como objeto](docs/pdf-objeto.png)
+
+PDF em tamanho real, maior que a página, com **Ver tudo** para enquadrar o
+objeto e as alças:
+
+![PDF grande fora da página](docs/pdf-grande.png)
 
 ## Uso
 
