@@ -48,6 +48,9 @@ jobs:
             --icon assets/open-x8-printer.png \
             --add-binary "vendor/pbmtojbg:." \
             --collect-all tkinterdnd2 \
+            --collect-all pymupdf \
+            --hidden-import pymupdf \
+            --hidden-import fitz \
             --hidden-import PIL._tkinter_finder \
             --paths . \
             packaging/entry.py
@@ -124,6 +127,9 @@ jobs:
           --icon assets/open-x8-printer.ico
           --add-binary "vendor/pbmtojbg.exe;."
           --collect-all tkinterdnd2
+          --collect-all pymupdf
+          --hidden-import pymupdf
+          --hidden-import fitz
           --hidden-import PIL._tkinter_finder
           --paths .
           packaging/entry.py

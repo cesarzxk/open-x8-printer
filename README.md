@@ -122,7 +122,8 @@ Recursos:
 - O painel mostra as dimensões da área em mm e dots
 - “Selecionar página inteira” para resetar a área
 - Densidade **Clara / Normal / Escura** e velocidade, como no app
-- Abrir **imagem** (uma ou várias), **PDF completo** ou digitar **texto**
+- Abrir **imagem** (uma ou várias), **PDF completo** (via PyMuPDF, sem
+  depender de poppler) ou digitar **texto**
 - “Manter posição na folha” preserva o lugar do recorte (preenche o resto com
   branco) ou desmarque para imprimir só o recorte no topo
 - “Ejetar a folha” usa `paperType=2`; desmarcado usa modo contínuo

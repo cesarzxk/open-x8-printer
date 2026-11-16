@@ -6,7 +6,6 @@ import json
 import os
 import re
 import subprocess
-import tempfile
 import threading
 import tkinter as tk
 from pathlib import Path
@@ -16,6 +15,14 @@ from PIL import Image, ImageTk
 
 from . import jbig, protocol, render
 from .transport import DEFAULT_MAC, Printer, PrinterError
+
+try:
+    import pymupdf as fitz  # PyMuPDF 1.24+
+except Exception:
+    try:
+        import fitz  # versões antigas
+    except Exception:
+        fitz = None
 
 try:
     from tkinterdnd2 import DND_FILES, TkinterDnD
@@ -914,14 +921,20 @@ class App(BaseTk):
         return page
 
     def _render_pdf(self, path: str, number: int) -> Image.Image:
-        with tempfile.TemporaryDirectory() as td:
-            out = Path(td) / "page"
-            subprocess.run(
-                ["pdftoppm", "-f", str(number), "-l", str(number),
-                 "-r", "203", "-png", "-singlefile", path, str(out)],
-                check=True, stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL)
-            return self._fit_page(Image.open(out.with_suffix(".png")))
+        if fitz is None:
+            raise RuntimeError("PyMuPDF não está instalado")
+        doc = fitz.open(path)
+        try:
+            page = doc.load_page(number - 1)
+            zoom = 203 / 72  # 203 dpi
+            pix = page.get_pixmap(
+                matrix=fitz.Matrix(zoom, zoom),
+                colorspace=fitz.csGRAY, alpha=False)
+            image = Image.frombytes(
+                "L", (pix.width, pix.height), pix.samples)
+            return self._fit_page(image)
+        finally:
+            doc.close()
 
     def _render_base(self, index: int) -> Image.Image:
         if index in self._base_cache:
@@ -983,7 +996,12 @@ class App(BaseTk):
         self.current_page = index
         if index not in self._page_cache:
             self.status.set(f"renderizando página {index + 1}…")
-            self._page_cache[index] = self._render_page(index)
+            try:
+                self._page_cache[index] = self._render_page(index)
+            except Exception as exc:
+                self.status.set("erro ao renderizar página")
+                messagebox.showerror("Página", str(exc))
+                return
         self.page_image = self._page_cache[index]
         if index not in self.page_selections:
             self.page_selections[index] = self._default_selection(index)
@@ -1016,19 +1034,27 @@ class App(BaseTk):
 
     @staticmethod
     def _pdf_page_count(path: str) -> int:
+        if fitz is None:
+            return 0
         try:
-            out = subprocess.run(["pdfinfo", path], capture_output=True,
-                                 text=True, timeout=20).stdout
-            match = re.search(r"^Pages:\s+(\d+)", out, re.MULTILINE)
-            return int(match.group(1)) if match else 1
+            doc = fitz.open(path)
+            try:
+                return max(1, doc.page_count)
+            finally:
+                doc.close()
         except Exception:
-            return 1
+            return 0
 
     def open_pdf(self) -> None:
         path = filedialog.askopenfilename(filetypes=[("PDF", "*.pdf")])
         if not path:
             return
         count = self._pdf_page_count(path)
+        if count <= 0:
+            messagebox.showerror(
+                "PDF", "Não foi possível abrir o PDF.\n"
+                "Verifique se o arquivo é válido e não está protegido.")
+            return
         self._clear_pages()
         self.pages = [{"kind": "pdf", "path": path, "index": page + 1,
                        "placements": []} for page in range(count)]
